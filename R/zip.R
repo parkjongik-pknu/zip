@@ -1,6 +1,5 @@
 # ============================================================
 # zip.R
-# initial : k-means, k-medoids, heirarchical
 # ============================================================
 
 zip_em <- function(X, Z, Y, max_iter=200, tol=1e-6, irls_max_iter=50, irls_tol=1e-6) {
@@ -14,10 +13,10 @@ zip_em <- function(X, Z, Y, max_iter=200, tol=1e-6, irls_max_iter=50, irls_tol=1
   # initialization
   # ------------------------------------------------------------
   # beta(poisson)
-  beta <- coef(glm(Y ~ X - 1, family = poisson)) # fitting glm(poisson)
+  beta <- as.vector(coef(glm(Y ~ X - 1, family = poisson))) # fitting glm(poisson)
   
   # gamma(logistic)
-  gamma <- coef(glm(as.numeric(Y == 0) ~ Z - 1, family = binomial)) #fitting glm(logistic)
+  gamma <- as.vector(coef(glm(as.numeric(Y == 0) ~ Z - 1, family = binomial))) #fitting glm(logistic)
   
   ll_old <- -Inf
   loglik_history <- numeric()
@@ -41,7 +40,8 @@ zip_em <- function(X, Z, Y, max_iter=200, tol=1e-6, irls_max_iter=50, irls_tol=1
     mu_z <- mu[zero_idx]
     
     # Y=0 <- bayes theorem
-    z_hat_2[zero_idx] <- ((1-pi_z)*exp(-mu_z)) / (pi_z + (1-pi_z)*exp(-mu_z))
+    z_hat_2[zero_idx] <- ((1-pi_z)*exp(-mu_z)) / (pi_z + (1-pi_z)*exp(-mu_z)+ 1e-15)
+    z_hat_1 <- 1-z_hat_2
     
     # Q-ftn
     ll_new <- sum(z_hat_1 * log(pi_prob + 1e-15) +
@@ -60,15 +60,16 @@ zip_em <- function(X, Z, Y, max_iter=200, tol=1e-6, irls_max_iter=50, irls_tol=1
     while (step_gamma <= irls_max_iter) {
       pi_curr <- 1 / (1 + exp(-(Z %*% gamma)))
       
-      # W_gamma
+      # W_gamma 
       W_gamma <- as.vector(pi_curr * (1 - pi_curr))
       W_gamma <- pmax(W_gamma, 1e-10)
       
-      # v_gamma
-      v_gamma <- Z %*% gamma + (z_hat_1 - pi_curr) / W_gamma
+      # gamma 업데이트 식을 보게되면 w의 역행렬이 존재해서 문제 발생 가능, 따라서 역행렬을 소거해서 직접 식 다시 작성
+      score_gamma <- t(Z) %*% (z_hat_1 - pi_curr)
+      info_gamma <- t(Z) %*% (W_gamma * Z)
       
-      # gamma update
-      gamma_new <- solve(t(Z) %*% (W_gamma * Z)) %*% t(Z) %*% (W_gamma * v_gamma)
+      # gamma update, 역행렬 연산 시 작은 상수 더해서 오류 방지
+      gamma_new <- gamma + solve(info_gamma + diag(1e-8, ncol(Z))) %*% score_gamma
       
       if (max(abs(gamma_new - gamma)) < irls_tol) {
         gamma <- as.vector(gamma_new)
@@ -87,11 +88,12 @@ zip_em <- function(X, Z, Y, max_iter=200, tol=1e-6, irls_max_iter=50, irls_tol=1
       W_beta <- as.vector(z_hat_2 * mu_curr)
       W_beta <- pmax(W_beta, 1e-10) 
       
-      # v_beta)
-      v_beta <- X %*% beta + (z_hat_2 * (Y - mu_curr)) / W_beta
+      # 마찬가지로 여기도 역행렬 소거해서 스코어함수, 헤시안 직접 계산
+      score_beta <- t(X) %*% (z_hat_2 * (Y - mu_curr))
+      info_beta <- t(X) %*% (W_beta * X)
       
-      # beta
-      beta_new <- solve(t(X) %*% (W_beta * X)) %*% t(X) %*% (W_beta * v_beta)
+      # beta update
+      beta_new <- beta + solve(info_beta + diag(1e-8, ncol(X))) %*% score_beta
       
       if (max(abs(beta_new - beta)) < irls_tol) {
         beta <- as.vector(beta_new)
